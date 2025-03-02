@@ -99,4 +99,4 @@ if st.button("🔍 Generate Response"):
         else:
             st.markdown("❌ This response is less relevant.", unsafe_allow_html=True)
 
-st.markdown("<p class='footer'>✨ Built with Streamlit & PyTorch | Created by St125050</p>", unsafe_allow_html=True)
+st.markdown("<p class='footer'>✨ Built with Streamlit & PyTorch | Created by St125496</p>", unsafe_allow_html=True)
