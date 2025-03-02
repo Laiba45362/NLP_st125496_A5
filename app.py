@@ -25,7 +25,6 @@ def check_files():
 
 # Download files if they don't exist
 if not check_files():
-    from transformers import AutoModelForSequenceClassification, AutoTokenizer
     print("Downloading model files...")
     model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=1)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -35,55 +34,76 @@ if not check_files():
 else:
     print("Model files already exist.")
 
-# ✅ Set device (Use GPU if available)
+# Set device (Use GPU if available)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
 
-# ✅ Load reward model (For scoring)
-reward_model = AutoModelForSequenceClassification.from_pretrained(model_dir, num_labels=1).to(device)
+try:
+    # Load reward model (For scoring)
+    reward_model = AutoModelForSequenceClassification.from_pretrained(model_dir, num_labels=1).to(device)
+except Exception as e:
+    print(f"Error loading reward model: {e}")
+    st.error(f"Error loading reward model: {e}")
 
-# Load the state dict
-state_dict = torch.load("reward_model.pth", map_location=device)
-missing_keys, unexpected_keys = reward_model.load_state_dict(state_dict, strict=False)
+# Check if the state dict file exists
+state_dict_path = os.path.join(model_dir, "reward_model_dpo.pth")
+if os.path.exists(state_dict_path):
+    try:
+        # Load the state dict
+        state_dict = torch.load(state_dict_path, map_location=device)
+        reward_model.load_state_dict(state_dict, strict=False)
+        reward_model.eval()
+    except Exception as e:
+        print(f"Error loading state dict: {e}")
+        st.error(f"Error loading state dict: {e}")
+else:
+    print(f"State dict file {state_dict_path} not found.")
+    st.error(f"State dict file {state_dict_path} not found.")
 
-# Check for missing or unexpected keys
-if missing_keys:
-    print(f"Missing keys: {missing_keys}")
-if unexpected_keys:
-    print(f"Unexpected keys: {unexpected_keys}")
+try:
+    # Load text generation model (For generating responses)
+    response_model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
+    response_tokenizer = AutoTokenizer.from_pretrained(model_name)
+except Exception as e:
+    print(f"Error loading response model: {e}")
+    st.error(f"Error loading response model: {e}")
 
-reward_model.eval()
+try:
+    # Load tokenizer and fix padding issue
+    reward_tokenizer = AutoTokenizer.from_pretrained(model_dir)
+    if reward_tokenizer.pad_token is None:
+        reward_tokenizer.pad_token = reward_tokenizer.eos_token  # Set EOS token as padding
+except Exception as e:
+    print(f"Error loading reward tokenizer: {e}")
+    st.error(f"Error loading reward tokenizer: {e}")
 
-# ✅ Load text generation model (For generating responses)
-response_model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
-response_tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-# ✅ Load tokenizer and fix padding issue
-reward_tokenizer = AutoTokenizer.from_pretrained(model_dir)
-if reward_tokenizer.pad_token is None:
-    reward_tokenizer.pad_token = reward_tokenizer.eos_token  # Set EOS token as padding
-
-# 🎯 Function to generate AI response + Score
+# Function to generate AI response + Score
 def generate_response(prompt):
-    # Generate a response text using the language model
-    input_ids = response_tokenizer.encode(prompt, return_tensors="pt").to(device)
-    response_output = response_model.generate(input_ids, max_length=100, num_return_sequences=1)
-    response_text = response_tokenizer.decode(response_output[0], skip_special_tokens=True)
+    try:
+        # Generate a response text using the language model
+        input_ids = response_tokenizer.encode(prompt, return_tensors="pt").to(device)
+        response_output = response_model.generate(input_ids, max_length=100, num_return_sequences=1)
+        response_text = response_tokenizer.decode(response_output[0], skip_special_tokens=True)
 
-    # Compute the reward score for the generated response
-    inputs = reward_tokenizer(response_text, truncation=True, padding=True, max_length=128, return_tensors="pt").to(device)
-    with torch.no_grad():
-        output = reward_model(**inputs)
+        # Compute the reward score for the generated response
+        inputs = reward_tokenizer(response_text, truncation=True, padding=True, max_length=128, return_tensors="pt").to(device)
+        with torch.no_grad():
+            output = reward_model(**inputs)
 
-    # Convert logit score to probability
-    score = output.logits.item()
-    probability = torch.sigmoid(torch.tensor(score)).item()
+        # Convert logit score to probability
+        score = output.logits.item()
+        probability = torch.sigmoid(torch.tensor(score)).item()
 
-    return response_text, probability  # Return response text + probability score
+        return response_text, probability  # Return response text + probability score
+    except Exception as e:
+        print(f"Error generating response: {e}")
+        st.error(f"Error generating response: {e}")
+        return "", 0.0
 
-# 🌟 Modern & Professional UI with Streamlit
+
 st.set_page_config(page_title="AI Response Evaluator", page_icon="💡", layout="wide")
 
-# 🎨 Apply Custom CSS for a Professional Look
+
 st.markdown("""
     <style>
         body {
@@ -141,14 +161,14 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# 🎨 Professional Header
+#  Header
 st.markdown("<h1>💡 AI Response Evaluator</h1>", unsafe_allow_html=True)
 st.markdown("<p style='text-align:center; font-size:1.3rem; color:#007bff;'>Input a prompt to see how the AI evaluates different responses!</p>", unsafe_allow_html=True)
 
-# 📌 User Input with large Text Box
+#User Input with large Text Box
 user_input = st.text_area("Enter your prompt:", "What is the capital of France?", height=150)
 
-# 🔍 Evaluate Button with Icon
+# Evaluate Button with Icon
 if st.button("🔍 Evaluate Response"):
     if user_input.strip() == "":
         st.warning("⚠️ Please enter a valid prompt!")
@@ -168,5 +188,5 @@ if st.button("🔍 Evaluate Response"):
         else:
             st.markdown("<p style='text-align:center; font-size:1.2rem; color:#721c24; background:#f8d7da; padding:10px; border-radius:5px;'>❌ The AI finds this response less relevant.</p>", unsafe_allow_html=True)
 
-# 🌟 Footer with Your Name & ID
-st.markdown("<p class='footer'>Built using Streamlit & PyTorch. <br> <strong>Created by St125496</strong></p>", unsafe_allow_html=True)
+# 🌟 Footer with Name & ID
+st.markdown("<p class='footer'>Built using Streamlit & PyTorch. <br> <strong>Created by Laiba_st125496 </strong></p>", unsafe_allow_html=True)
